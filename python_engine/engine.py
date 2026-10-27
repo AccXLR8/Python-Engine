@@ -1,11 +1,17 @@
 """Pure Python Chain Reaction engine implemented on top of NumPy."""
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Iterable, List, Sequence
+from typing import List, Optional, Sequence
 
 from .board import Board
-from .errors import IllegalMove, InvalidBoard, InvalidState, ReplayError
+from .errors import (
+    IllegalMove,
+    InvalidState,
+    ReactionCycle,
+    ReactionError,
+    ReactionLimitExceeded,
+    ReplayError,
+)
 from .game_state import GameState, GameStatus, PlayerState
 from .move import Move
 from .reaction import Explosion, OrbPlacement, OrbTransfer, ReactionStep, ReactionTimeline
@@ -50,9 +56,10 @@ def apply_move(state: GameState, player: int, mv: Move) -> MoveResult:
     if next_state.board.orb_count_at(mv.row, mv.col) >= next_state.board.critical_mass(mv.row, mv.col):
         initial_unstable.append(placement.cell)
 
-    _simulate_reactions(next_state.board, timeline, initial_unstable)
-    _update_eliminations(next_state)
-    outcome = _evaluate_result(next_state)
+    outcome = _simulate_reactions(next_state, timeline, initial_unstable)
+    if outcome is None:
+        _update_eliminations(next_state)
+        outcome = _evaluate_result(next_state)
     if next_state.status.kind == "active":
         _advance_turn(next_state)
     return MoveResult(next_state, timeline, outcome)
@@ -64,8 +71,8 @@ def replay(initial_state: GameState, moves: Sequence[Move]) -> GameState:
         player = state.current_player()
         try:
             result = apply_move(state, player, mv)
-        except IllegalMove as err:
-            raise ReplayError(f"illegal move at step {idx}: {err}") from err
+        except (IllegalMove, ReactionError) as err:
+            raise ReplayError(f"move failed at step {idx}: {err}") from err
         state = result.final_state
     return state
 
@@ -78,12 +85,35 @@ def _mark_player_moved(state: GameState, player: int) -> None:
     raise InvalidState("player order invalid")
 
 
-def _simulate_reactions(board: Board, timeline: ReactionTimeline, current_wave: List[int]) -> None:
+def _simulate_reactions(
+    state: GameState, timeline: ReactionTimeline, current_wave: List[int]
+) -> Optional[GameResult]:
+    """Resolve reaction waves, stopping as soon as the game is won.
+
+    Explosions intentionally clear the entire cell and transfer one orb to each
+    orthogonal neighbor. Repeated-state detection and a hard explosion limit
+    protect callers from pathological reactions that cannot settle.
+    """
     if not current_wave:
-        return
+        return None
+
+    board = state.board
     width = board.width
+    seen_states: set[tuple[bytes, bytes, tuple[int, ...]]] = set()
+    explosion_count = 0
+    explosion_limit = max(10_000, board.len * 1_000)
+
     while current_wave:
         current_wave.sort()
+        signature = (
+            board.owners.tobytes(),
+            board.orbs.tobytes(),
+            tuple(current_wave),
+        )
+        if signature in seen_states:
+            raise ReactionCycle("reaction entered a repeating state")
+        seen_states.add(signature)
+
         step = ReactionStep()
         next_wave: List[int] = []
         next_flags = [False] * board.len
@@ -92,6 +122,13 @@ def _simulate_reactions(board: Board, timeline: ReactionTimeline, current_wave: 
             owner = board.owner_at(row, col)
             if owner == -1:
                 continue
+
+            explosion_count += 1
+            if explosion_count > explosion_limit:
+                raise ReactionLimitExceeded(
+                    f"reaction exceeded {explosion_limit} explosions"
+                )
+
             step.explosions.append(Explosion(cell=cell_index, player=owner))
             board.drain_cell(row, col)
             for n_row, n_col in board.neighbors(row, col):
@@ -106,8 +143,20 @@ def _simulate_reactions(board: Board, timeline: ReactionTimeline, current_wave: 
                 ):
                     next_flags[neighbor_index] = True
                     next_wave.append(neighbor_index)
+
         timeline.steps.append(step)
+
+        # A player who has moved and owns no cells cannot regain ownership after
+        # a complete wave. End immediately once only one living player remains,
+        # rather than continuing winner-only reactions indefinitely.
+        _update_eliminations(state)
+        outcome = _evaluate_result(state)
+        if outcome.winner is not None:
+            return outcome
+
         current_wave = next_wave
+
+    return None
 
 
 def _update_eliminations(state: GameState) -> None:

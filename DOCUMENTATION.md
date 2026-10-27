@@ -19,13 +19,13 @@ source .venv/bin/activate  # Windows: .venv\Scripts\activate
 pip install -e .
 ```
 
-This installs the package `chainreaction-py` in editable mode along with its dependency
-(NumPy). You can now import `chainreaction_py` from any script/notebook.
+This installs the distribution `chainreaction-py` in editable mode along with its
+NumPy dependency. The import package is named `python_engine`.
 
 ## 3. Quick Start
 
 ```python
-from chainreaction_py import new_game, apply_move, validate_move, Move
+from python_engine import new_game, apply_move, validate_move, Move
 
 state = new_game(width=6, height=8, players=[0, 1])
 move = Move(row=2, col=3)
@@ -51,15 +51,22 @@ state = result.final_state  # feed into the next turn
 
 - **State cloning**: `GameState.copy()` deep-copies the board (NumPy arrays) and player list
   to ensure immutability between calls, matching the Rust semantics.
-- **Reaction simulation**: `_simulate_reactions` mirrors the Rust wave-based algorithm,
-  queuing unstable cells per wave and recording explosions/transfers for each step.
-- **Outcome detection**: `_evaluate_result` derives `GameResult` after each move, updating
-  `GameStatus` (active vs. won).
+- **Reaction simulation**: `_simulate_reactions` queues unstable cells per wave and records
+  explosions/transfers for each step. An exploding cell is cleared completely and sends one
+  orb to each orthogonal neighbor; excess mass is intentionally consumed by the explosion.
+- **Immediate victory**: Eliminations are evaluated after every completed reaction wave. As
+  soon as only one eligible player remains, the game ends without running winner-only waves.
+- **Termination safeguards**: Exact repeated reaction states raise `ReactionCycle`; a
+  defensive limit of `max(10,000, board_cells * 1,000)` explosions raises
+  `ReactionLimitExceeded`. Since moves operate on clones, either error leaves the caller's
+  input state unchanged.
+- **Outcome detection**: `_evaluate_result` updates `GameStatus` (active vs. won) both during
+  reactions and after ordinary non-reacting moves.
 
 ## 6. Testing
 
-You can add pytest suites under `python-engine/tests/` (not included by default). After
-installing with `pip install -e .[dev]`, run:
+Regression tests are included under `tests/`. After installing with
+`pip install -e .[dev]`, run:
 
 ```bash
 pytest

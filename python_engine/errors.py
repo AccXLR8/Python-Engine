@@ -45,3 +45,15 @@ class InvalidBoard(EngineError):
 
 class ReplayError(EngineError):
     pass
+
+
+class ReactionError(EngineError):
+    """Base class for reactions that cannot be resolved safely."""
+
+
+class ReactionCycle(ReactionError):
+    """Raised when a deterministic reaction state repeats."""
+
+
+class ReactionLimitExceeded(ReactionError):
+    """Raised when a reaction exceeds its defensive explosion limit."""

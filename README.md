@@ -26,9 +26,10 @@ python-engine/
 
 - **NumPy backing**: The board keeps two arrays (`owners`, `orbs`) to provide constant-time
   access and vectorized counting when evaluating eliminations.
-- **Deterministic rules**: The Python logic follows the same deterministic rules as the
-  Rust code: every move clones the state, drops an orb, and runs the multi-wave reaction
-  until stability.
+- **Deterministic rules**: Every move clones the state, drops an orb, and runs deterministic
+  reaction waves until the board stabilizes or one eligible player remains.
+- **Safe late games**: Exploding cells are completely cleared, victory stops winner-only
+  reactions immediately, and cycle detection plus an explosion limit prevent hangs.
 - **Timeline fidelity**: `ReactionTimeline` captures the placement, each wave's explosions,
   and per-orb transfers, allowing frontends to animate or audit reactions exactly.
 - **Serialization ready**: Each data class offers simple Python primitives (ints/lists)
